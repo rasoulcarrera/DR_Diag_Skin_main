@@ -1,0 +1,49 @@
+{
+  "model_name": "Qwen/Qwen2-VL-2B-Instruct",
+  "model_type": "local",
+  "training_stage": "stage1_sft",
+  "output_dir": "./outputs",
+  "train_image_dir": "./data/train/images",
+  "train_metadata_file": "./data/train/metadata.json",
+  
+  "training": {
+    "num_epochs": 15,
+    "batch_size": 4,
+    "learning_rate": 2e-5,
+    "weight_decay": 0.01,
+    "warmup_steps": 100,
+    "total_steps": 1500,
+    "gradient_accumulation_steps": 4,
+    "save_every": 2,
+    "seed": 42
+  },
+  
+  "model": {
+    "max_length": 512,
+    "image_size": 224,
+    "use_fp16": true,
+    "use_device_map": true,
+    "mixed_precision": "fp16"
+  },
+  
+  "lora": {
+    "use_lora": true,
+    "lora_r": 32,
+    "lora_alpha": 64,
+    "lora_dropout": 0.1,
+    "lora_target_modules": ["q_proj", "v_proj", "k_proj", "o_proj"]
+  },
+  
+  "system": {
+    "num_workers": 4,
+    "use_wandb": true,
+    "wandb_project": "skin-disease-diagnosis-stage1",
+    "log_level": "INFO"
+  },
+  
+  "stage1_objectives": {
+    "primary": "disease_identification",
+    "secondary": "spatial_awareness",
+    "description": "Learn to identify skin diseases and provide spatial descriptions using text"
+  }
+} 

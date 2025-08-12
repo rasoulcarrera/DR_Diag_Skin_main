@@ -1,0 +1,57 @@
+{
+  "model_name": "Qwen/Qwen2-VL-2B-Instruct",
+  "model_type": "local",
+  "training_stage": "stage2_grpo",
+  "output_dir": "./outputs_stage2",
+  "train_image_dir": "./data/train/images",
+  "train_metadata_file": "./data/train/metadata_bbox.json",
+  
+  "training": {
+    "num_epochs": 10,
+    "batch_size": 2,
+    "learning_rate": 1e-5,
+    "weight_decay": 0.01,
+    "warmup_steps": 50,
+    "total_steps": 500,
+    "gradient_accumulation_steps": 8,
+    "save_every": 2,
+    "seed": 42
+  },
+  
+  "model": {
+    "max_length": 256,
+    "image_size": 224,
+    "use_fp16": true,
+    "use_device_map": true,
+    "mixed_precision": "fp16"
+  },
+  
+  "lora": {
+    "use_lora": true,
+    "lora_r": 16,
+    "lora_alpha": 32,
+    "lora_dropout": 0.1,
+    "target_modules": ["q_proj", "v_proj"]
+  },
+  
+  "system": {
+    "num_workers": 2,
+    "use_wandb": true,
+    "wandb_project": "skin-disease-diagnosis-stage2",
+    "log_level": "INFO"
+  },
+  
+  "stage2_objectives": {
+    "primary": "bounding_box_detection",
+    "secondary": "spatial_precision",
+    "description": "Learn precise bounding box coordinates for skin disease localization",
+    "bbox_format": "[x1, y1, x2, y2]",
+    "coordinate_system": "pixel_coordinates"
+  },
+  
+  "grpo_settings": {
+    "reward_function": "bbox_accuracy",
+    "spatial_tolerance": 5,
+    "iou_threshold": 0.7
+  }
+}
