@@ -9,7 +9,7 @@ import json
 import shutil
 from pathlib import Path
 
-def prepare_isic_dataset(source_dir, output_dir, train_split=0.8, stage=1):
+def prepare_isic_dataset(source_dir, output_dir, train_split=0.8, stage=1, use_bbox_detection=True):
     """
     Prepare ISIC dataset by organizing images and creating metadata files
     
@@ -77,11 +77,11 @@ def prepare_isic_dataset(source_dir, output_dir, train_split=0.8, stage=1):
         
         # Create metadata entry based on stage
         if stage == 1:
-            # Stage 1: Enhanced SFT with spatial descriptions
-            entry = create_stage1_entry(row, image_path, df.columns)
+            # Stage 1: SFT with pre-computed bboxes
+            entry = create_stage1_entry(row, image_path, df.columns, use_bbox_detection)
         else:
             # Stage 2: GRPO with bounding boxes
-            entry = create_stage2_entry(row, image_path, df.columns)
+            entry = create_stage2_entry(row, image_path, df.columns, use_bbox_detection)
         
         # Split into train/val
         if idx < len(df) * train_split:
@@ -113,8 +113,8 @@ def prepare_isic_dataset(source_dir, output_dir, train_split=0.8, stage=1):
     print(f"Validation samples: {len(val_data)}")
     print(f"Output directory: {output_dir}")
 
-def create_stage1_entry(row, image_path, columns):
-    """Create Stage 1 metadata entry with enhanced spatial information"""
+def create_stage1_entry(row, image_path, columns, use_bbox_detection=True):
+    """Create Stage 1 metadata entry with pre-computed bbox coordinates"""
     entry = {
         'image_name': os.path.basename(image_path),
         'diagnosis': str(row.get('diagnosis', 'Unknown'))
@@ -122,28 +122,35 @@ def create_stage1_entry(row, image_path, columns):
     
     # Add location information
     if 'anatom_site_general' in columns and pd.notna(row['anatom_site_general']):
-        entry['anatom_site_general'] = str(row['anatom_site_general'])
+        entry['location'] = str(row['anatom_site_general'])
+    else:
+        entry['location'] = 'center'
     
-    # Add classification
     if 'benign_malignant' in columns and pd.notna(row['benign_malignant']):
         entry['benign_malignant'] = str(row['benign_malignant'])
     
-    # Add age and sex if available
-    if 'age_approx' in columns and pd.notna(row['age_approx']):
-        entry['age_approx'] = str(row['age_approx'])
-    if 'sex' in columns and pd.notna(row['sex']):
-        entry['sex'] = str(row['sex'])
-    
-    # Add enhanced spatial features (estimated)
-    entry['location'] = estimate_location(row, columns)
-    entry['size'] = estimate_size(row, columns)
-    entry['features'] = estimate_features(row, columns)
-    entry['multiple_lesions'] = False  # Default, can be updated manually
-    entry['concerning_features'] = ['irregular_borders', 'color_variation']  # Default
+    # Pre-compute bbox coordinates using YOLO (run only if not already computed)
+    if use_bbox_detection:
+        # Check if bbox already exists in metadata to avoid re-computation
+        existing_bbox = row.get('bbox') if hasattr(row, 'get') else None
+        if existing_bbox and isinstance(existing_bbox, list) and len(existing_bbox) == 4:
+            # Use existing bbox coordinates
+            entry['bbox'] = existing_bbox
+            entry['bbox_source'] = 'existing_precomputed'
+            print(f"♻️  Using existing bbox for {os.path.basename(image_path)}: {existing_bbox}")
+        else:
+            # Generate new bbox using YOLO
+            bbox = get_yolo_bbox(image_path)
+            entry['bbox'] = bbox
+            entry['bbox_source'] = 'yolo_precomputed'
+            print(f"✅ Generated new bbox for {os.path.basename(image_path)}: {bbox}")
+    else:
+        entry['bbox'] = None
+        entry['bbox_source'] = 'disabled'
     
     return entry
 
-def create_stage2_entry(row, image_path, columns):
+def create_stage2_entry(row, image_path, columns, use_bbox_detection=True):
     """Create Stage 2 metadata entry with bounding box coordinates"""
     entry = {
         'image_name': os.path.basename(image_path),
@@ -156,10 +163,28 @@ def create_stage2_entry(row, image_path, columns):
     if 'benign_malignant' in columns and pd.notna(row['benign_malignant']):
         entry['benign_malignant'] = str(row['benign_malignant'])
     
-    # Add bounding box coordinates (estimated center for now)
-    # In real implementation, you'd need manual annotation or use object detection
-    entry['bbox'] = estimate_bounding_box(row, columns)
-    entry['confidence'] = 0.8  # Default confidence
+    # Pre-compute bbox coordinates using YOLO (run only if not already computed)
+    if use_bbox_detection:
+        # Check if bbox already exists in metadata to avoid re-computation
+        existing_bbox = row.get('bbox') if hasattr(row, 'get') else None
+        if existing_bbox and isinstance(existing_bbox, list) and len(existing_bbox) == 4:
+            # Use existing bbox coordinates
+            entry['bbox'] = existing_bbox
+            entry['confidence'] = 0.8
+            entry['bbox_source'] = 'existing_precomputed'
+            print(f"♻️  Using existing bbox for {os.path.basename(image_path)}: {existing_bbox}")
+        else:
+            # Generate new bbox using YOLO
+            bbox = get_yolo_bbox(image_path)
+            entry['bbox'] = bbox
+            entry['confidence'] = 0.8
+            entry['bbox_source'] = 'yolo_precomputed'
+            print(f"✅ Generated new bbox for {os.path.basename(image_path)}: {bbox}")
+    else:
+        # Use placeholder when bbox detection is disabled
+        entry['bbox'] = [100, 100, 200, 200]
+        entry['confidence'] = 0.5
+        entry['bbox_source'] = 'placeholder'
     
     return entry
 
@@ -199,16 +224,33 @@ def estimate_features(row, columns):
     
     return ', '.join(features)
 
-def estimate_bounding_box(row, columns):
-    """Estimate bounding box coordinates (placeholder for manual annotation)"""
-    # This is a placeholder - in real implementation you need:
-    # 1. Manual annotation of bounding boxes, or
-    # 2. Use object detection model to generate initial boxes, or
-    # 3. Use segmentation masks to derive bounding boxes
+def get_yolo_bbox(image_path):
+    """Get actual bounding box using YOLO detection"""
+    try:
+        from ultralytics import YOLO
+        
+        # Load YOLO model (will download on first use)
+        model = YOLO('yolov8n.pt')
+        
+        # Run detection
+        results = model(image_path, verbose=False)
+        
+        if results and len(results) > 0:
+            result = results[0]
+            if result.boxes is not None and len(result.boxes) > 0:
+                # Get the most confident detection
+                confidences = result.boxes.conf.cpu().numpy()
+                best_idx = confidences.argmax()
+                box = result.boxes.xyxy[best_idx].cpu().numpy()
+                return [int(x) for x in box]  # [x1, y1, x2, y2]
     
-    # For now, return a default center box
-    # Format: [x1, y1, x2, y2] in pixel coordinates
-    return [100, 100, 200, 200]  # Placeholder values
+    except ImportError:
+        print("ultralytics not installed. Using fallback bbox.")
+    except Exception as e:
+        print(f"Error with YOLO detection: {e}")
+    
+    # Fallback to center box if YOLO fails
+    return [100, 100, 200, 200]
 
 def create_bbox_annotation_guide():
     """Create a guide for manual bounding box annotation"""
@@ -256,8 +298,13 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     if args.stage == 2:
-        print("Preparing Stage 2 dataset with bounding boxes...")
-        print("Note: You need to manually annotate bounding boxes first!")
-        create_bbox_annotation_guide()
+        print("Preparing Stage 2 dataset with pre-computed bounding boxes...")
     
-    prepare_isic_dataset(args.source_dir, args.output_dir, args.train_split, args.stage)
+    # Check if dataset already exists
+    metadata_file = os.path.join(args.output_dir, "train", "metadata.json" if args.stage == 1 else "metadata_bbox.json")
+    if os.path.exists(metadata_file):
+        print("📋 Dataset already exists! YOLO will only run for new/missing bbox coordinates.")
+    else:
+        print("🔄 Running YOLO detection for new dataset preparation...")
+    
+    prepare_isic_dataset(args.source_dir, args.output_dir, args.train_split, args.stage, use_bbox_detection=True)
