@@ -44,6 +44,8 @@
   "stage1_objectives": {
     "primary": "disease_identification",
     "secondary": "spatial_awareness",
-    "description": "Learn to identify skin diseases and provide spatial descriptions using text"
-  }
-} 
+    "description": "Learn to identify skin diseases with basic bbox introduction"
+  },
+  
+  "use_minimal_text": true
+}

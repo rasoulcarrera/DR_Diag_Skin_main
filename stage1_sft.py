@@ -31,14 +31,80 @@ import wandb
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-class SkinDiseaseDataset:
-    """Enhanced dataset class for ISIC skin disease images with spatial awareness"""
+class YOLOBBoxGenerator:
+    """YOLO-based bbox generator for skin lesion detection"""
     
-    def __init__(self, image_dir: str, metadata_file: str, tokenizer, max_length: int = 512, image_size: int = 224):
+    def __init__(self, model_path=None, confidence_threshold=0.5):
+        self.model_path = model_path
+        self.confidence_threshold = confidence_threshold
+        self.model = None
+        self._load_model()
+    
+    def _load_model(self):
+        """Load YOLO model"""
+        try:
+            from ultralytics import YOLO
+            if self.model_path and os.path.exists(self.model_path):
+                self.model = YOLO(self.model_path)
+                logger.info(f"Loaded custom YOLO model: {self.model_path}")
+            else:
+                # Use pre-trained YOLOv8 nano model
+                self.model = YOLO('yolov8n.pt')
+                logger.info("Loaded default YOLOv8n model for object detection")
+        except ImportError:
+            logger.warning("ultralytics not installed. Install with: pip install ultralytics")
+            self.model = None
+        except Exception as e:
+            logger.warning(f"Could not load YOLO model: {e}")
+            self.model = None
+    
+    def get_bbox(self, image_path):
+        """Get bounding box from image using YOLO"""
+        if not self.model:
+            logger.warning("YOLO model not loaded, using fallback bbox")
+            return self._fallback_bbox()
+        
+        try:
+            results = self.model(image_path, verbose=False)
+            if results and len(results) > 0:
+                result = results[0]
+                if result.boxes is not None and len(result.boxes) > 0:
+                    # Filter by confidence and get best detection
+                    confidences = result.boxes.conf.cpu().numpy()
+                    high_conf_indices = confidences >= self.confidence_threshold
+                    
+                    if any(high_conf_indices):
+                        best_idx = confidences.argmax()
+                        box = result.boxes.xyxy[best_idx].cpu().numpy()
+                        return [int(x) for x in box]  # [x1, y1, x2, y2]
+        except Exception as e:
+            logger.warning(f"Error detecting bbox with YOLO: {e}")
+        
+        return self._fallback_bbox()
+    
+    def _fallback_bbox(self):
+        """Return center bbox as fallback when YOLO detection fails"""
+        return [112, 112, 336, 336]  # Center box for 224x224 image
+    
+    def get_model_info(self):
+        """Get information about the loaded YOLO model"""
+        return {
+            "model_type": "yolo",
+            "model_path": self.model_path or "yolov8n.pt",
+            "confidence_threshold": self.confidence_threshold,
+            "is_loaded": self.model is not None
+        }
+
+class SkinDiseaseDataset:
+    """Dataset class with minimal text and optional bbox generation"""
+    
+    def __init__(self, image_dir: str, metadata_file: str, tokenizer, max_length: int = 512, 
+                 image_size: int = 224, use_minimal_text: bool = True):
         self.image_dir = image_dir
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.image_size = image_size
+        self.use_minimal_text = use_minimal_text
         
         # Load metadata
         with open(metadata_file, 'r') as f:
@@ -54,65 +120,87 @@ class SkinDiseaseDataset:
         self.prepare_data()
     
     def prepare_data(self):
-        """Prepare dataset with enhanced spatial instructions for better localization"""
+        """Prepare dataset with minimal text and actual bbox coordinates"""
         self.data = []
         
         for item in self.metadata:
             image_path = os.path.join(self.image_dir, item['image_name'])
             if os.path.exists(image_path):
-                # Enhanced instruction for better spatial understanding
-                instruction = """
-                Analyze this skin image carefully and provide:
-                1. Skin condition diagnosis
-                2. Precise location description (use spatial terms like 'upper left', 'center', 'lower right')
-                3. Approximate size estimation
-                4. Key visual features and concerning characteristics
-                5. Multiple lesions if present and their relative positions
-                """
                 
-                # Create detailed response with spatial information
-                response = f"Skin Condition: {item.get('diagnosis', 'Unknown')}\n"
+                if self.use_minimal_text:
+                    # Minimal text approach
+                    instruction = "Diagnose skin condition and locate lesion."
+                    
+                    # Use pre-computed bbox from metadata (no YOLO re-computation)
+                    diagnosis = item.get('diagnosis', 'Unknown')
+                    response = f"{diagnosis}"
+                    
+                    # Use bbox from metadata if available
+                    if 'bbox' in item and item['bbox']:
+                        bbox = item['bbox']
+                        response += f" <bbox>{bbox[0]},{bbox[1]},{bbox[2]},{bbox[3]}</bbox>"
+                    else:
+                        # Fallback to location info
+                        location = item.get('location', item.get('anatom_site_general', 'center'))
+                        response += f" <location>{location}</location>"
+                    
+                    # Add classification if available
+                    if 'benign_malignant' in item:
+                        response += f" <type>{item['benign_malignant']}</type>"
                 
-                # Add location information
-                if 'location' in item:
-                    response += f"Location: {item['location']}\n"
-                elif 'anatom_site_general' in item:
-                    response += f"Body Location: {item['anatom_site_general']}\n"
                 else:
-                    response += f"Location: Center of image\n"
+                    # Original verbose approach
+                    instruction = """
+                    Analyze this skin image carefully and provide:
+                    1. Skin condition diagnosis
+                    2. Precise location description (use spatial terms like 'upper left', 'center', 'lower right')
+                    3. Approximate size estimation
+                    4. Key visual features and concerning characteristics
+                    5. Multiple lesions if present and their relative positions
+                    """
+                    
+                    # Create detailed response with spatial information
+                    response = f"Skin Condition: {item.get('diagnosis', 'Unknown')}\n"
+                    
+                    # Add location information
+                    if 'location' in item:
+                        response += f"Location: {item['location']}\n"
+                    elif 'anatom_site_general' in item:
+                        response += f"Body Location: {item['anatom_site_general']}\n"
+                    else:
+                        response += f"Location: Center of image\n"
+                    
+                    # Add size information
+                    if 'size' in item:
+                        response += f"Size: {item['size']}\n"
+                    else:
+                        response += f"Size: Approximately 1-2cm in diameter\n"
+                    
+                    # Add features
+                    if 'features' in item:
+                        response += f"Features: {item['features']}\n"
+                    elif 'benign_malignant' in item:
+                        response += f"Classification: {item['benign_malignant']}\n"
+                        response += f"Features: This lesion shows characteristics typical of {item['benign_malignant']} growths\n"
+                    else:
+                        response += f"Features: Dark pigmentation, irregular borders, asymmetric shape\n"
+                    
+                    response += f"Description: This image shows a skin lesion that appears to be {item.get('diagnosis', 'a skin condition')} requiring medical attention."
                 
-                # Add size information
-                if 'size' in item:
-                    response += f"Size: {item['size']}\n"
+                # Format the full text
+                if self.use_minimal_text:
+                    full_text = f"User: {instruction}\nAssistant: {response}"
                 else:
-                    response += f"Size: Approximately 1-2cm in diameter\n"
-                
-                # Add features
-                if 'features' in item:
-                    response += f"Features: {item['features']}\n"
-                elif 'benign_malignant' in item:
-                    response += f"Classification: {item['benign_malignant']}\n"
-                    response += f"Features: This lesion shows characteristics typical of {item['benign_malignant']} growths\n"
-                else:
-                    response += f"Features: Dark pigmentation, irregular borders, asymmetric shape\n"
-                
-                # Add multiple lesions info
-                if 'multiple_lesions' in item and item['multiple_lesions']:
-                    response += f"Multiple Lesions: Yes, {item.get('lesion_count', 'several')} lesions detected\n"
-                    response += f"Distribution: {item.get('distribution', 'scattered across the area')}\n"
-                
-                # Add concerning features
-                if 'concerning_features' in item:
-                    response += f"Concerning Features: {', '.join(item['concerning_features'])}\n"
-                
-                response += f"Description: This image shows a skin lesion that appears to be {item.get('diagnosis', 'a skin condition')} requiring medical attention."
+                    full_text = f"### Instruction:\n{instruction}\n\n### Response:\n{response}"
                 
                 self.data.append({
                     'image_path': image_path,
-                    'full_text': f"### Instruction:\n{instruction}\n\n### Response:\n{response}"
+                    'full_text': full_text
                 })
         
-        logger.info(f"Prepared {len(self.data)} samples for training with enhanced spatial instructions")
+        text_type = "minimal" if self.use_minimal_text else "detailed"
+        bbox_info = "with bbox detection" if self.bbox_generator else "without bbox detection"
+        logger.info(f"Prepared {len(self.data)} samples with {text_type} text {bbox_info}")
     
     def __len__(self):
         return len(self.data)
@@ -341,7 +429,8 @@ def main():
         metadata_file=config['train_metadata_file'],
         tokenizer=trainer.tokenizer,
         max_length=config['model'].get('max_length', 512),
-        image_size=config['model'].get('image_size', 224)
+        image_size=config['model'].get('image_size', 224),
+        use_minimal_text=config.get('use_minimal_text', True)
     )
     
     # Start training

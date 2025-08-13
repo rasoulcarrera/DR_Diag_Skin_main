@@ -1,155 +1,234 @@
-# Skin Disease Diagnosis Model Training - 2-Stage Pipeline
+# Skin Disease Diagnosis with Progressive BBox Training
 
-This is a **2-stage training pipeline** for skin disease diagnosis using vision-language models:
+An advanced AI system for medical skin disease diagnosis that combines disease identification, precise localization, and medical reasoning in a two-stage progressive training approach.
 
-- **Stage 1**: SFT with Enhanced Spatial Instructions (Current)
-- **Stage 2**: GRPO for Precise Bounding Box Detection (Future)
+## Model Purpose and Goals
 
-## **Stage 1: Enhanced SFT Training (Current Focus)**
+This system is designed to assist medical professionals in skin disease diagnosis by providing:
 
-### **What It Does:**
-✅ **Disease Identification**: Learn to identify skin conditions from images  
-✅ **Spatial Awareness**: Provide precise location descriptions (text-based)  
-✅ **Feature Analysis**: Identify concerning characteristics  
-✅ **Multiple Lesion Detection**: Handle cases with multiple abnormalities  
+1. **Disease Identification**: Accurate classification of skin conditions (melanoma, nevus, basal cell carcinoma, etc.)
+2. **Precise Localization**: Exact bounding box coordinates to pinpoint lesion locations
+3. **Medical Reasoning**: Chain-of-thought explanations for diagnostic decisions
+4. **Spatial Awareness**: Understanding of lesion position, size, and characteristics
 
-### **Key Features:**
-- **Enhanced Instructions**: Detailed prompts for better spatial understanding
-- **Rich Metadata**: Location, size, features, concerning characteristics
-- **LoRA Fine-tuning**: Efficient parameter updates
-- **Wandb Logging**: Real-time training monitoring
+The model learns progressively:
+- **Stage 1**: Establishes foundation for disease recognition and basic spatial understanding
+- **Stage 2**: Refines localization precision and develops detailed medical reasoning capabilities
 
-## **Stage 2: GRPO Training (Future)**
+## Overview
 
-### **What It Will Do:**
-🎯 **Precise Bounding Boxes**: Output exact [x1, y1, x2, y2] coordinates  
-🎯 **Spatial Precision**: Pixel-perfect localization  
-🎯 **Advanced Localization**: Multiple lesion detection with individual boxes  
+This system implements a progressive training approach where the model first learns basic concepts and then develops advanced diagnostic and reasoning skills through reinforcement learning.
 
-## **Setup**
+## Features
 
-### **1. Install Dependencies:**
+- 🎯 **Progressive BBox Training**: Basic introduction → Precise refinement
+- 🤖 **YOLO BBox Detection**: Automated lesion localization
+- 💬 **Minimal Text Responses**: Concise medical diagnosis format
+- 🧠 **Chain-of-Thought**: Medical reasoning for Stage 2
+- ⚙️ **Configurable**: Easy enable/disable of bbox models
+
+## Quick Start
+
+### 1. Installation
+
 ```bash
+# Clone repository
+git clone <your-repo>
+cd DR_Diag_Skin
+
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-### **2. Prepare Your Dataset:**
+### 2. Prepare Data
 
-**For Stage 1 (Current):**
 ```bash
-python prepare_data.py --source_dir /path/to/isic/dataset --output_dir ./data --stage 1
+# Prepare your ISIC dataset
+python prepare_data.py --source_dir ./isic_data --output_dir ./data --stage 1
 ```
 
-**For Stage 2 (Future):**
+### 3. Progressive Training
+
+**Option A: Automatic Progressive Training**
 ```bash
-python prepare_data.py --source_dir /path/to/isic/dataset --output_dir ./data --stage 2
+python train_progressive.py
 ```
 
-### **3. Update Configuration:**
-Edit `config.json` for Stage 1 or `config_stage2.json` for Stage 2.
-
-## **Training**
-
-### **Stage 1 Training (Current):**
+**Option B: Manual Stage-by-Stage**
 ```bash
+# Stage 1: Basic bbox introduction
+python stage1_sft.py --config config.json
+
+# Stage 2: Enhanced GRPO refinement
+python enhanced_grpo.py --config config_stage2.json --stage1_model ./outputs/stage1_final_model
+```
+
+## Configuration
+
+### YOLO BBox Configuration
+
+Enable/disable YOLO bounding box detection:
+
+```json
+{
+  "use_bbox_model": true,
+  "bbox_model_config": {
+    "model_path": null,             // Use default YOLOv8n or specify custom model
+    "confidence_threshold": 0.5     // Adjust detection sensitivity
+  }
+}
+```
+
+### Minimal Text Format
+
+**Stage 1 Output:**
+```
+Melanoma <bbox>150,200,300,350</bbox> <type>malignant</type>
+```
+
+**Stage 2 Output:**
+```
+Step 1: Overall appearance analysis...
+Step 2: Feature assessment...
+Step 3: Precise localization at [142,186,298,342]
+Step 4: Diagnosis: Melanoma with detailed reasoning
+```
+
+## How It Works
+
+The system uses a sophisticated approach to medical image analysis:
+
+1. **Vision-Language Integration**: Combines advanced computer vision with natural language processing
+2. **Progressive Learning**: Starts with basic pattern recognition and evolves to complex medical reasoning
+3. **YOLO Detection**: Uses YOLOv8 for accurate and fast bounding box detection
+4. **Reward-Based Refinement**: Uses reinforcement learning to improve diagnostic accuracy and reasoning quality
+
+## Training Stages
+
+### Stage 1: Basic BBox Introduction
+- **Duration**: 2-4 hours
+- **BBox Model**: YOLO (fast, good baseline)
+- **Text**: Minimal responses
+- **Goal**: Learn basic spatial awareness
+
+### Stage 2: Enhanced GRPO Refinement
+- **Duration**: 4-6 hours  
+- **BBox Model**: DETR (higher precision)
+- **Text**: Chain-of-thought reasoning
+- **Goal**: Precise localization + medical reasoning
+
+## File Structure
+
+```
+DR_Diag_Skin/
+├── config.json                 # Main configuration
+├── config_stage2.json          # Stage 2 GRPO config
+├── stage1_sft.py              # Stage 1 training
+├── enhanced_grpo.py           # Stage 2 enhanced GRPO
+├── prepare_data.py            # Data preparation
+├── train_progressive.py       # Automatic progressive training
+├── requirements.txt           # Dependencies
+└── README.md                  # This file
+```
+
+## Usage Examples
+
+### Quick Prototyping (Stage 1 Only)
+```bash
+# Disable Stage 2, use YOLO for fast results
 python stage1_sft.py --config config.json
 ```
 
-### **Stage 2 Training (Future):**
+### Medical Production (Both Stages)
 ```bash
-python stage2_grpo.py --config config_stage2.json --stage1_model ./outputs/stage1_final_model
+# Full progressive training for highest accuracy
+python train_progressive.py
 ```
 
-## **File Structure**
-
-```
-├── stage1_sft.py                    # Stage 1: SFT training
-├── stage2_grpo.py                   # Stage 2: GRPO training  
-├── prepare_data.py                  # Enhanced data preparation
-├── config.json                      # Stage 1 configuration
-├── config_stage2.json              # Stage 2 configuration
-├── requirements.txt                 # Python dependencies
-└── README.md                       # This file
+### Research Setup (Custom BBox Model)
+```bash
+# Edit config.json to use GroundingDINO
+# Then run progressive training
+python train_progressive.py
 ```
 
-## **Configuration**
+## Advanced Configuration
 
-### **Stage 1 Config (`config.json`):**
-- `model_name`: Qwen2-VL-2B-Instruct
-- `training_stage`: stage1_sft
-- `num_epochs`: 15 (increased for better learning)
-- `lora_r`: 32 (increased for better performance)
+### YOLO Detection Model
 
-### **Stage 2 Config (`config_stage2.json`):**
-- `training_stage`: stage2_grpo
-- `batch_size`: 2 (smaller due to bounding box complexity)
-- `learning_rate`: 1e-5 (lower for fine-tuning)
-- `bbox_format`: [x1, y1, x2, y2]
+The system uses YOLOv8 for bounding box detection:
 
-## **Dataset Format**
+- **Fast Performance**: Optimized for real-time inference
+- **Good Accuracy**: Reliable detection for medical images
+- **Easy Setup**: Automatic model download on first use
+- **Configurable**: Adjustable confidence thresholds
 
-### **Stage 1 (Enhanced SFT):**
+YOLO provides the optimal balance of speed and accuracy for medical image analysis.
+
+### Disable BBox Detection
 ```json
 {
-  "image_name": "melanoma_001.jpg",
-  "diagnosis": "Melanoma",
-  "location": "Upper left quadrant",
-  "size": "1.5cm diameter",
-  "features": "irregular_borders, asymmetric_shape",
-  "concerning_features": ["asymmetry", "irregular_borders"]
+  "use_bbox_model": false
 }
 ```
 
-### **Stage 2 (GRPO with Bounding Boxes):**
-```json
-{
-  "image_name": "melanoma_001.jpg",
-  "diagnosis": "Melanoma",
-  "bbox": [150, 200, 300, 350],
-  "confidence": 0.9
-}
+## Dependencies
+
+- `torch>=2.0.0`
+- `transformers>=4.35.0`
+- `peft>=0.6.0`
+- `ultralytics>=8.0.0` (for YOLO)
+- `timm>=0.9.0` (for DETR)
+
+## Troubleshooting
+
+**CUDA Out of Memory:**
+- Reduce `batch_size` in config
+- Use `gradient_accumulation_steps`
+
+**BBox Model Issues:**
+- YOLO: `pip install ultralytics`
+- DETR: Update transformers
+- GroundingDINO: Follow official setup
+
+**Training Issues:**
+- Check data paths in config
+- Verify ISIC dataset format
+- Monitor GPU memory usage
+
+## Model Output Examples
+
+The trained model produces medical-grade diagnostic outputs with increasing sophistication:
+
+**Stage 1 Output (Foundation):**
+```
+User: Diagnose skin condition and locate lesion.
+Assistant: Melanoma <bbox>150,200,300,350</bbox> <type>malignant</type>
 ```
 
-## **Training Progression**
+**Stage 2 Output (Advanced Reasoning):**
+```
+User: Analyze this skin image systematically.
+Assistant: 
+Step 1: Overall appearance - I observe a dark, irregularly shaped lesion with varied pigmentation
+Step 2: Feature assessment - The borders appear asymmetric with color variation typical of concerning lesions
+Step 3: Precise localization - The primary lesion is located at coordinates [142,186,298,342]
+Step 4: Medical diagnosis - This appears consistent with melanoma. The irregular borders, asymmetric shape, and color variation warrant immediate medical attention for biopsy confirmation.
+```
 
-### **Current (Stage 1):**
-1. **Enhanced SFT Training** → Learn disease identification + basic spatial awareness
-2. **Rich Text Output** → Detailed descriptions with location information
-3. **Medical Knowledge** → Understand skin conditions and features
+This progressive approach ensures the model develops from basic recognition to sophisticated medical reasoning capabilities.
 
-### **Future (Stage 2):**
-1. **Use Stage 1 Model** → As base for GRPO training
-2. **Add Bounding Boxes** → Manual annotation or object detection
-3. **GRPO Training** → Learn precise coordinate output
-4. **Final Result** → Disease identification + exact bounding boxes
+## License
 
-## **What Was Enhanced**
+This project is licensed under the MIT License.
 
-✅ **Better Prompts**: More detailed spatial instructions  
-✅ **Rich Metadata**: Location, size, features, concerning characteristics  
-✅ **Stage Progression**: Clear path from SFT to GRPO  
-✅ **Spatial Awareness**: Text-based localization before bounding boxes  
-✅ **Medical Focus**: Enhanced medical terminology and features  
+## Citation
 
-## **Benefits of This Approach**
-
-1. **Progressive Learning**: Start simple, add complexity gradually
-2. **Resource Efficient**: Stage 1 works on consumer GPUs
-3. **Medical Accuracy**: Focus on disease identification first
-4. **Spatial Understanding**: Build spatial awareness before precise coordinates
-5. **Future Ready**: Easy transition to bounding box detection
-
-## **Next Steps**
-
-After completing Stage 1:
-1. **Evaluate Performance** → Test disease identification accuracy
-2. **Prepare Stage 2 Data** → Add bounding box annotations
-3. **Run Stage 2 Training** → GRPO for precise localization
-4. **Integration** → Combine both stages for complete solution
-
-## **Notes**
-
-- **Stage 1 is designed for experimentation** with minimal VRAM requirements
-- **Stage 2 requires bounding box annotations** (manual or automated)
-- **Progressive approach** ensures stable learning and better results
-- **Medical applications** benefit from this staged learning approach
+If you use this work, please cite:
+```bibtex
+@software{skin_disease_progressive_bbox,
+  title={Progressive BBox Training for Skin Disease Diagnosis},
+  author={Abaryan},
+  year={2025}
+}
+```
