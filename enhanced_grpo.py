@@ -20,8 +20,9 @@ from typing import Dict, List, Optional, Tuple
 import re
 
 from transformers import (
+    Qwen2VLForConditionalGeneration,
     AutoTokenizer, 
-    AutoModelForCausalLM,
+    AutoProcessor,
     get_linear_schedule_with_warmup,
     set_seed
 )
@@ -358,8 +359,9 @@ The lesion is located at:"""
 class EnhancedGRPODataset:
     """Enhanced dataset with chain-of-thought prompts and reward computation"""
     
-    def __init__(self, image_dir: str, metadata_file: str, tokenizer, config: Dict):
+    def __init__(self, image_dir: str, metadata_file: str, processor, tokenizer, config: Dict):
         self.image_dir = image_dir
+        self.processor = processor
         self.tokenizer = tokenizer
         self.config = config
         self.max_length = config.get('max_length', 512)
@@ -452,33 +454,119 @@ Based on the observed features, this is consistent with {diagnosis}. The {'conce
     def __getitem__(self, idx):
         item = self.data[idx]
         
-        # Load and process image
+        # Load image for Qwen2VL processing
         try:
             from PIL import Image
             image = Image.open(item['image_path']).convert('RGB')
-            image = self.transform(image)
         except Exception as e:
             logger.warning(f"Error loading image {item['image_path']}: {e}")
-            image = torch.zeros(3, self.image_size, self.image_size)
+            # Create a dummy image if loading fails
+            image = Image.new('RGB', (self.image_size, self.image_size), color='white')
         
-        # Tokenize
-        tokenized = self.tokenizer(
-            item['full_text'],
-            truncation=True,
-            padding=False,
+        # Prepare conversation format for Enhanced GRPO with chain-of-thought
+        conversation = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": image},
+                    {"type": "text", "text": item['instruction']}
+                ]
+            },
+            {
+                "role": "assistant", 
+                "content": [
+                    {"type": "text", "text": item['response']}
+                ]
+            }
+        ]
+        
+        # Process with Qwen2VL processor
+        processed = self.processor.apply_chat_template(
+            conversation,
+            tokenize=True,
+            add_generation_prompt=False,
             max_length=self.max_length,
-            return_tensors='pt'
+            padding=False,
+            return_tensors="pt"
         )
         
         return {
-            'input_ids': tokenized['input_ids'].squeeze(),
-            'attention_mask': tokenized['attention_mask'].squeeze(),
-            'labels': tokenized['input_ids'].squeeze(),
-            'image': image,
+            'input_ids': processed['input_ids'].squeeze(),
+            'attention_mask': processed['attention_mask'].squeeze(),
+            'labels': processed['input_ids'].squeeze(),
+            'pixel_values': processed.get('pixel_values', torch.zeros(1, 3, self.image_size, self.image_size)).squeeze(),
             'bbox': torch.tensor(item['bbox'], dtype=torch.float),
             'diagnosis': item['diagnosis'],
             'metadata': item['metadata']
         }
+
+class EnhancedGRPOTrainer:
+    """Enhanced GRPO trainer with EasyR1-style reward modeling"""
+    
+    def __init__(self, config, stage1_model_path):
+        self.config = config
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.stage1_model_path = stage1_model_path
+        
+        # Initialize reward model
+        self.reward_model = EnhancedRewardModel(config.get('reward_config', {}))
+        
+        set_seed(config['training'].get('seed', 42))
+        self.setup_model()
+        self.setup_training_components()
+        
+        logger.info(f"Initialized Enhanced GRPO trainer on device: {self.device}")
+        logger.info(f"Using Stage 1 model from: {stage1_model_path}")
+    
+    def setup_model(self):
+        """Setup Qwen2VL model for Enhanced GRPO"""
+        # Load processor for image-text handling
+        self.processor = AutoProcessor.from_pretrained(self.stage1_model_path, trust_remote_code=True)
+        
+        # Load tokenizer
+        self.tokenizer = AutoTokenizer.from_pretrained(self.stage1_model_path, trust_remote_code=True)
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+        
+        # Load Stage 1 Qwen2VL model
+        self.model = Qwen2VLForConditionalGeneration.from_pretrained(
+            self.stage1_model_path,
+            torch_dtype=torch.float16 if self.config['model'].get('use_fp16', True) else torch.float32,
+            trust_remote_code=True,
+            device_map='auto' if self.config['model'].get('use_device_map', True) else None
+        )
+        
+        # Apply LoRA for Enhanced GRPO
+        if self.config['lora'].get('use_lora', True):
+            lora_config = LoraConfig(
+                task_type=TaskType.CAUSAL_LM,
+                inference_mode=False,
+                r=self.config['lora'].get('lora_r', 16),
+                lora_alpha=self.config['lora'].get('lora_alpha', 32),
+                lora_dropout=self.config['lora'].get('lora_dropout', 0.1),
+                target_modules=self.config['lora'].get('target_modules', ['q_proj', 'v_proj'])
+            )
+            self.model = get_peft_model(self.model, lora_config)
+            self.model.print_trainable_parameters()
+        
+        logger.info("Enhanced GRPO model setup complete")
+    
+    def setup_training_components(self):
+        """Setup optimizer and scheduler for Enhanced GRPO"""
+        self.optimizer = torch.optim.AdamW(
+            self.model.parameters(),
+            lr=self.config['training']['learning_rate'],
+            weight_decay=self.config['training'].get('weight_decay', 0.01)
+        )
+        
+        from transformers import get_linear_schedule_with_warmup
+        self.scheduler = get_linear_schedule_with_warmup(
+            self.optimizer,
+            num_warmup_steps=self.config['training'].get('warmup_steps', 50),
+            num_training_steps=self.config['training']['total_steps']
+        )
+        
+        self.scaler = GradScaler() if self.config['model'].get('use_fp16', True) else None
 
 def main():
     """Main function for enhanced GRPO training"""
@@ -495,11 +583,15 @@ def main():
     logger.info(f"Config: {args.config}")
     logger.info(f"Stage 1 model: {args.stage1_model}")
     
+    # Create trainer
+    trainer = EnhancedGRPOTrainer(config, args.stage1_model)
+    
     # Create dataset
     dataset = EnhancedGRPODataset(
         image_dir=config['train_image_dir'],
         metadata_file=config['train_metadata_file'],
-        tokenizer=None,  # Will be initialized with model
+        processor=trainer.processor,
+        tokenizer=trainer.tokenizer,
         config=config
     )
     

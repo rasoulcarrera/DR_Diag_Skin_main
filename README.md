@@ -12,8 +12,8 @@ This system is designed to assist medical professionals in skin disease diagnosi
 4. **Spatial Awareness**: Understanding of lesion position, size, and characteristics
 
 The model learns progressively:
-- **Stage 1**: Establishes foundation for disease recognition and basic spatial understanding
-- **Stage 2**: Refines localization precision and develops detailed medical reasoning capabilities
+- **Stage 1 [SFT]**: Establishes foundation for disease recognition and basic spatial understanding
+- **Stage 2 [GRPO]**: Refines localization precision and develops detailed medical reasoning capabilities
 
 ## Overview
 
@@ -33,8 +33,8 @@ This system implements a progressive training approach where the model first lea
 
 ```bash
 # Clone repository
-git clone <your-repo>
-cd DR_Diag_Skin
+git clone https://github.com/rasoulcarrera/DR_Diag_Skin_main.git
+cd DR_Diag_Skin_main
 
 # Install dependencies
 pip install -r requirements.txt

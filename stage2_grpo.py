@@ -17,8 +17,9 @@ from torch.cuda.amp import autocast, GradScaler
 import torchvision.transforms as transforms
 
 from transformers import (
+    Qwen2VLForConditionalGeneration,
     AutoTokenizer, 
-    AutoModelForCausalLM,
+    AutoProcessor,
     get_linear_schedule_with_warmup,
     set_seed
 )
@@ -34,8 +35,9 @@ logger = logging.getLogger(__name__)
 class SkinDiseaseBBoxDataset:
     """Dataset class for ISIC skin disease images with bounding box annotations"""
     
-    def __init__(self, image_dir: str, metadata_file: str, tokenizer, max_length: int = 512, image_size: int = 224):
+    def __init__(self, image_dir: str, metadata_file: str, processor, tokenizer, max_length: int = 512, image_size: int = 224):
         self.image_dir = image_dir
+        self.processor = processor
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.image_size = image_size
@@ -99,29 +101,47 @@ class SkinDiseaseBBoxDataset:
     def __getitem__(self, idx):
         item = self.data[idx]
         
-        # Load and process image
+        # Load image for Qwen2VL processing
         try:
             from PIL import Image
             image = Image.open(item['image_path']).convert('RGB')
-            image = self.transform(image)
         except Exception as e:
             logger.warning(f"Error loading image {item['image_path']}: {e}")
-            image = torch.zeros(3, self.image_size, self.image_size)
+            # Create a dummy image if loading fails
+            image = Image.new('RGB', (self.image_size, self.image_size), color='white')
         
-        # Tokenize text
-        tokenized = self.tokenizer(
-            item['full_text'],
-            truncation=True,
-            padding=False,
+        # Prepare conversation format for Qwen2VL Stage 2 (GRPO)
+        conversation = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": image},
+                    {"type": "text", "text": item['instruction']}
+                ]
+            },
+            {
+                "role": "assistant", 
+                "content": [
+                    {"type": "text", "text": item['response']}
+                ]
+            }
+        ]
+        
+        # Process with Qwen2VL processor
+        processed = self.processor.apply_chat_template(
+            conversation,
+            tokenize=True,
+            add_generation_prompt=False,
             max_length=self.max_length,
-            return_tensors='pt'
+            padding=False,
+            return_tensors="pt"
         )
         
         return {
-            'input_ids': tokenized['input_ids'].squeeze(),
-            'attention_mask': tokenized['attention_mask'].squeeze(),
-            'labels': tokenized['input_ids'].squeeze(),
-            'image': image,
+            'input_ids': processed['input_ids'].squeeze(),
+            'attention_mask': processed['attention_mask'].squeeze(),
+            'labels': processed['input_ids'].squeeze(),
+            'pixel_values': processed.get('pixel_values', torch.zeros(1, 3, self.image_size, self.image_size)).squeeze(),
             'bbox': torch.tensor(item['bbox'], dtype=torch.float32)
         }
 
@@ -142,14 +162,17 @@ class SkinDiseaseGRPOTrainer:
         logger.info(f"Using Stage 1 model from: {stage1_model_path}")
     
     def setup_model(self):
-        """Setup model and tokenizer using Stage 1 model as base"""
+        """Setup Qwen2VL model and tokenizer using Stage 1 model as base"""
+        # Load processor for image-text handling
+        self.processor = AutoProcessor.from_pretrained(self.stage1_model_path, trust_remote_code=True)
+        
         # Load tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(self.stage1_model_path, trust_remote_code=True)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
         
-        # Load Stage 1 model
-        self.model = AutoModelForCausalLM.from_pretrained(
+        # Load Stage 1 Qwen2VL model
+        self.model = Qwen2VLForConditionalGeneration.from_pretrained(
             self.stage1_model_path,
             torch_dtype=torch.float16 if self.config['model'].get('use_fp16', True) else torch.float32,
             trust_remote_code=True,
@@ -195,20 +218,20 @@ class SkinDiseaseGRPOTrainer:
         progress_bar = tqdm(dataloader, desc=f'Stage 2 Epoch {epoch}')
         
         for batch in progress_bar:
-            # Move batch to device
+            # Move batch to device for Qwen2VL
             input_ids = batch['input_ids'].to(self.device)
             attention_mask = batch['attention_mask'].to(self.device)
             labels = batch['labels'].to(self.device)
-            images = batch['image'].to(self.device)
+            pixel_values = batch['pixel_values'].to(self.device) if 'pixel_values' in batch else None
             bboxes = batch['bbox'].to(self.device)
             
-            # Forward pass
+            # Forward pass with Qwen2VL
             with autocast(enabled=self.config['model'].get('use_fp16', True)):
                 outputs = self.model(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
-                    labels=labels,
-                    images=images
+                    pixel_values=pixel_values,
+                    labels=labels
                 )
                 loss = outputs.loss
             
@@ -322,6 +345,7 @@ def main():
     train_dataset = SkinDiseaseBBoxDataset(
         image_dir=config['train_image_dir'],
         metadata_file=config['train_metadata_file'],
+        processor=trainer.processor,
         tokenizer=trainer.tokenizer,
         max_length=config['model'].get('max_length', 512),
         image_size=config['model'].get('image_size', 224)
