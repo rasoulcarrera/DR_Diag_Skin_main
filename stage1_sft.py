@@ -99,7 +99,7 @@ class YOLOBBoxGenerator:
 class SkinDiseaseDataset:
     """Dataset class with minimal text and optional bbox generation"""
     
-    def __init__(self, image_dir: str, metadata_file: str, processor, tokenizer, max_length: int = 512, 
+    def __init__(self, image_dir: str, metadata_file: str, processor, tokenizer, max_length: int = 512,
                  image_size: int = 224, use_minimal_text: bool = True):
         self.image_dir = image_dir
         self.processor = processor
