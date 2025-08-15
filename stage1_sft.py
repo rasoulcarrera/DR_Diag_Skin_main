@@ -201,8 +201,7 @@ class SkinDiseaseDataset:
                 })
         
         text_type = "minimal" if self.use_minimal_text else "detailed"
-        bbox_info = "with bbox detection" if self.bbox_generator else "without bbox detection"
-        logger.info(f"Prepared {len(self.data)} samples with {text_type} text {bbox_info}")
+        logger.info(f"Prepared {len(self.data)} samples with {text_type} text")
     
     def __len__(self):
         return len(self.data)
@@ -237,20 +236,63 @@ class SkinDiseaseDataset:
         ]
         
         # Process with Qwen2VL processor
-        processed = self.processor.apply_chat_template(
-            conversation,
-            tokenize=True,
-            add_generation_prompt=False,
-            max_length=self.max_length,
-            padding=False,
-            return_tensors="pt"
+        try:
+            text_input = self.processor.apply_chat_template(
+                conversation, 
+                tokenize=False, 
+                add_generation_prompt=False
+            )
+        except:
+            # Fallback to simple format
+            text_input = f"<image>{item['full_text'].split('\n')[0]}"
+        
+        # Prepare examples in the format expected by processor
+        examples = {
+            "image": [image],
+            "text": [text_input],
+        }
+        
+        # Process using processor directly
+        inputs = self.processor(
+            images=[image],
+            text=[text_input],
+            padding="max_length",
+            truncation=True,
+            return_tensors="pt",
+            max_length=self.max_length
         )
         
+        # Get processed tensors
+        input_ids = inputs["input_ids"].squeeze(0)
+        attention_mask = inputs["attention_mask"].squeeze(0)
+        pixel_values = inputs.get("pixel_values", torch.zeros(1, 3, self.image_size, self.image_size)).squeeze(0)
+        
+        # Fix pixel_values shape if needed
+        if len(pixel_values.shape) == 2:
+            # Reshape flattened tensor to [3, H, W]
+            total_pixels = pixel_values.shape[0] * pixel_values.shape[1]
+            h = int((total_pixels // 3) ** 0.5)
+            w = int(total_pixels // 3 // h)
+            if h * w * 3 == total_pixels:
+                pixel_values = pixel_values.reshape(3, h, w)
+        
+        # Process labels (target text)
+        with self.tokenizer.as_target_tokenizer():
+            label_encodings = self.tokenizer(
+                [item['full_text'].split('\n')[1] if '\n' in item['full_text'] else item['full_text']],
+                padding="max_length",
+                truncation=True,
+                return_tensors="pt",
+                max_length=self.max_length
+            )
+        labels = label_encodings["input_ids"].squeeze(0)
+        labels[labels == self.tokenizer.pad_token_id] = -100
+        
         return {
-            'input_ids': processed['input_ids'].squeeze(),
-            'attention_mask': processed['attention_mask'].squeeze(), 
-            'labels': processed['input_ids'].squeeze(),
-            'pixel_values': processed.get('pixel_values', torch.zeros(1, 3, self.image_size, self.image_size)).squeeze()
+            'input_ids': input_ids,
+            'attention_mask': attention_mask, 
+            'labels': labels,
+            'pixel_values': pixel_values
         }
 
 class SkinDiseaseTrainer:
