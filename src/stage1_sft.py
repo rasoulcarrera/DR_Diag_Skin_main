@@ -452,6 +452,7 @@ class SkinDiseaseTrainer:
         
         self.model.save_pretrained(save_path)
         self.tokenizer.save_pretrained(save_path)
+        self.processor.save_pretrained(save_path)
         
         # Save training info
         training_info = {
