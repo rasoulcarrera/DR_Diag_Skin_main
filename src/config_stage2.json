@@ -34,23 +34,9 @@
     "target_modules": ["q_proj", "v_proj"]
   },
   
-  "system": {
-    "num_workers": 2,
-    "use_wandb": true,
-    "wandb_project": "skin-disease-diagnosis-stage2",
-    "log_level": "INFO"
-  },
-  
-  "stage2_objectives": {
-    "primary": "bounding_box_detection",
-    "secondary": "spatial_precision",
-    "description": "Learn precise bounding box coordinates for skin disease localization",
-    "bbox_format": "[x1, y1, x2, y2]",
-    "coordinate_system": "pixel_coordinates"
-  },
+
   
   "grpo_settings": {
-    "reward_function": "bbox_accuracy",
     "spatial_tolerance": 5,
     "iou_threshold": 0.7
   }
