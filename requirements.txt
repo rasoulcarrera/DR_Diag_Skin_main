@@ -14,8 +14,6 @@ tqdm>=4.65.0
 wandb>=0.15.0
 opencv-python>=4.8.0
 
-# YOLO for bbox detection
-ultralytics>=8.0.0
 
 # Additional utilities
 einops>=0.7.0
