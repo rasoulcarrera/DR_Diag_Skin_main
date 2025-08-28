@@ -68,3 +68,13 @@ Outputs: `ham10000_with_spatial_data.json` and `ham10000_with_spatial_data.csv`
 
 - Stage 1: 80-85% diagnosis accuracy, 100% spatial description accuracy
 - Stage 2: Enhanced spatial precision with bbox coordinate prediction
+
+
+If you use this work, please cite:
+```bibtex
+@software{skin_disease_progressive_bbox,
+  title={Progressive BBox Training for Skin Disease Diagnosis},
+  author={Abaryan},
+  year={2025}
+}
+```

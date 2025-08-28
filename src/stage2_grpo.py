@@ -65,21 +65,29 @@ class BBoxRewardCalculator:
         """Calculate reward based on spatial accuracy"""
         reward = 0.0
         
-        # Diagnosis accuracy reward (0.4 weight)
+        # Diagnosis accuracy reward (0.5 weight)
         diagnosis_correct = self.check_diagnosis_match(prediction, ground_truth)
-        reward += 0.4 if diagnosis_correct else 0.0
+        reward += 0.5 if diagnosis_correct else 0.0
         
-        # Spatial description reward (0.3 weight)
+        # Spatial description reward (0.3 weight) - main Stage 2 focus
         if bbox_gt:
             spatial_reward = self.check_spatial_accuracy(prediction, ground_truth, bbox_gt)
             reward += 0.3 * spatial_reward
         
-        # Segmentation reward (0.3 weight)
+        # Segmentation reward (0.2 weight)
         if mask_path and os.path.exists(mask_path):
             seg_reward = self.check_segmentation_accuracy(prediction, mask_path)
-            reward += 0.3 * seg_reward
+            reward += 0.2 * seg_reward
         
-        return reward
+        # Quality bonus (0.1 weight) - encourages proper responses
+        quality_bonus = self.check_response_quality(prediction, ground_truth)
+        reward += 0.1 * quality_bonus
+        
+        # Simple penalty for obvious gaming
+        if len(prediction.split()) < 3 or len(prediction.split()) > 100:
+            reward *= 0.5
+        
+        return max(0.0, reward)
     
     def check_diagnosis_match(self, prediction, ground_truth):
         """Check if diagnosis matches"""
@@ -157,6 +165,29 @@ class BBoxRewardCalculator:
             
         except Exception:
             return 0.0
+    
+    def check_response_quality(self, prediction, ground_truth):
+        """Check response quality and reasoning"""
+        quality_score = 0.0
+        
+        # Length penalty for too short responses
+        if len(prediction.split()) < 3:
+            return 0.0
+        
+        # Reward proper medical language
+        medical_terms = ['appears', 'lesion', 'diagnosis', 'condition', 'skin']
+        term_score = sum(1 for term in medical_terms if term in prediction.lower()) / len(medical_terms)
+        quality_score += 0.4 * term_score
+        
+        # Reward similar response structure to ground truth
+        gt_length = len(ground_truth.split())
+        pred_length = len(prediction.split())
+        length_ratio = min(pred_length, gt_length) / max(pred_length, gt_length)
+        quality_score += 0.6 * length_ratio
+        
+        return min(1.0, quality_score)
+    
+
 
 class SpatialGRPODataset:
     """Dataset for GRPO training with spatial rewards"""

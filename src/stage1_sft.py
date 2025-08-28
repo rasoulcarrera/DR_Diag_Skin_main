@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 Skin Disease Diagnosis Model Training Script - Stage 1 (SFT)
-Based on working qwen2-5-vl-isic-training-reliable.ipynb approach
 """
 
 import os
@@ -27,13 +26,12 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 class SpatialDatasetLoader:
-    """Load spatial dataset matching notebook approach"""
+    """Load spatial dataset"""
     
     def __init__(self, config):
         self.config = config
         
     def load_spatial_dataset(self):
-        """Load spatial dataset exactly like notebook"""
         # Load annotated data with spatial information
         with open(self.config["spatial_dataset_file"], 'r') as f:
             spatial_data = json.load(f)
@@ -147,7 +145,7 @@ def collate_fn(examples, processor, config):
     return batch
 
 class SkinDiseaseTrainer:
-    """Stage 1 SFT Trainer matching notebook approach"""
+    """Stage 1 SFT Trainer"""
     
     def __init__(self, config):
         self.config = config
@@ -161,7 +159,7 @@ class SkinDiseaseTrainer:
         logger.info(f"Initialized Stage 1 SFT trainer on device: {self.device}")
     
     def setup_model(self):
-        """Setup model and processor exactly like notebook"""
+        """Setup model and processor"""
         model_name = self.config["model_name"]
         
         # Load model
@@ -186,13 +184,13 @@ class SkinDiseaseTrainer:
         logger.info(f"Model loaded: {model_name}")
     
     def prepare_datasets(self, dataset):
-        """Prepare train/eval split like notebook"""
+        """Prepare train/eval split"""
         # Shuffle dataset to avoid bias
         shuffled_dataset = dataset.copy()
         random.shuffle(shuffled_dataset)
         
         # Use 70/30 split for better evaluation
-        train_size = int(0.7 * len(shuffled_dataset))
+        train_size = int(0.8 * len(shuffled_dataset))
         train_data = shuffled_dataset[:train_size]
         eval_data = shuffled_dataset[train_size:]
         
@@ -229,7 +227,7 @@ class SkinDiseaseTrainer:
             eval_steps=1000,
             evaluation_strategy="steps",
             save_strategy="steps",
-            save_total_limit=2,
+            save_total_limit=1,
             
             # Memory and performance optimizations
             remove_unused_columns=False,
@@ -260,7 +258,7 @@ class SkinDiseaseTrainer:
         return trainer
 
 def test_model_inference(model, processor, test_samples, config, num_tests=10):
-    """Test model inference like notebook"""
+    """Test model inference"""
     results = []
     
     for i, sample in enumerate(test_samples[:num_tests]):
