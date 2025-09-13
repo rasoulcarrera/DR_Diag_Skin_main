@@ -42,31 +42,14 @@ class HAM10000Annotator:
         total_area = mask.shape[0] * mask.shape[1]
         coverage = mask_area / total_area
         
-        center_x = x + w // 2
-        center_y = y + h // 2
-        img_center_x = mask.shape[1] // 2
-        img_center_y = mask.shape[0] // 2
-        
-        if center_x < img_center_x * 0.4:
-            h_position = "left"
-        elif center_x > img_center_x * 1.6:
-            h_position = "right"
-        else:
-            h_position = "center"
-            
-        if center_y < img_center_y * 0.4:
-            v_position = "upper"
-        elif center_y > img_center_y * 1.6:
-            v_position = "lower"
-        else:
-            v_position = "center"
-        
-        spatial_desc = f"lesion located in {v_position}-{h_position} region"
+        center_x = x + w / 2
+        center_y = y + h / 2
+        img_width = mask.shape[1]
+        img_height = mask.shape[0]
         
         return {
             'bbox': [float(x), float(y), float(x + w), float(y + h)],
-            'area_coverage': float(coverage),
-            'spatial_description': spatial_desc
+            'area_coverage': float(coverage)
         }
     
     def process_dataset(self):
@@ -94,9 +77,7 @@ class HAM10000Annotator:
                     'sex': row['sex'],
                     'localization': row['localization'],
                     'bbox': mask_data['bbox'],
-                    'area_coverage': mask_data['area_coverage'],
-                    'spatial_description': mask_data['spatial_description'],
-                    'mask_available': True
+                    'area_coverage': mask_data['area_coverage']
                 }
             else:
                 annotation = {
@@ -108,9 +89,7 @@ class HAM10000Annotator:
                     'sex': row['sex'],
                     'localization': row['localization'],
                     'bbox': None,
-                    'area_coverage': None,
-                    'spatial_description': None,
-                    'mask_available': False
+                    'area_coverage': None
                 }
                 
             annotations.append(annotation)
@@ -126,17 +105,17 @@ class HAM10000Annotator:
         df_annotated.to_csv(csv_path, index=False)
 
 def main():
-    image_dir = "/AI-ML/DATASET/HAM10000/HAM10000_images"
-    mask_dir = "/AI-ML/DATASET/HAM10000_segmentations"
-    csv_path = "/AI-ML/DATASET/HAM10000/HAM10000_metadata.csv"
-    output_path = "/AI-ML/DATASET/HAM10000/ham10000_with_spatial_data.json"
+    image_dir = "D:/AI-ML/DATASET/HAM10000/HAM10000_images"
+    mask_dir = "D:/AI-ML/DATASET/HAM10000_segmentations"
+    csv_path = "D:/AI-ML/DATASET/HAM10000/HAM10000_metadata.csv"
+    output_path = "D:/AI-ML/DATASET/HAM10000/ham10000_with_spatial_data.json"
     
     annotator = HAM10000Annotator(image_dir, csv_path, mask_dir, output_path)
     annotations = annotator.process_dataset()
     annotator.save_annotations(annotations)
     
-    masked_count = sum(1 for a in annotations if a['mask_available'])
-    print(f"Processed {len(annotations)} images, {masked_count} with spatial data")
+    # masked_count = sum(1 for a in annotations if a['mask_available'])
+    print(f"Processed {len(annotations)} images, with spatial data")
 
 if __name__ == "__main__":
     main()

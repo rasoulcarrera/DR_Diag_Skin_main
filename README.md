@@ -27,6 +27,8 @@ python src/stage1_sft.py --config src/config.json
 ### Stage 2 GRPO
 ```bash
 python src/stage2_grpo.py --config src/config_stage2.json --stage1_model ./qwen2_5_vl_trained
+or
+accelerate launch --multi_gpu --num_processes=2 stage2_grpo_hf.py --config config_stage2_hf.json
 ```
 
 ## Data Preparation

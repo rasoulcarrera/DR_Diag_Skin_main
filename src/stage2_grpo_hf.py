@@ -23,14 +23,14 @@ def load_hf_dataset(config):
         train_data = train_data.select(range(min(config["train_limit"], len(train_data))))
     
     # Filter for samples with bbox data for Stage 2
-    train_data = train_data.filter(lambda x: x.get('mask_available', False) and x.get('bbox'))
+    train_data = train_data.filter(lambda x: x.get('bbox') is not None and len(x.get('bbox', [])) == 4)
     
     logger.info(f"Loaded {len(train_data)} samples with spatial data")
     return train_data
 
 def prepare_dataset(data, processor):
     """Prepare dataset for GRPO training"""
-    def format_conversation(example):
+    def format_conversation(examples):
         # Get diagnosis mapping
         dx_names = {
             'akiec': 'actinic keratosis',
@@ -42,58 +42,84 @@ def prepare_dataset(data, processor):
             'vasc': 'vascular lesion'
         }
         
-        diagnosis_full = dx_names.get(example['diagnosis'], example['diagnosis'])
-        prompt = (
-            "Analyze this skin lesion. Reply concisely using tags: "
-            "<diagnosis>...</diagnosis> and <location>...</location>."
-        )
+        # Handle both single example and batched examples
+        if not isinstance(examples['diagnosis'], list):
+            examples = {k: [v] for k, v in examples.items()}
         
-        # Format spatial description
-        spatial_desc = example['spatial_description']
-        response = (
-            f"<diagnosis>{diagnosis_full}</diagnosis> "
-            f"<location>{spatial_desc}</location>"
-        )
-        
-        # Create conversation format
-        conversation = [
-            {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": prompt}]},
-            {"role": "assistant", "content": [{"type": "text", "text": response}]}
-        ]
-        
-        # Build minimal chat-templated prompt that includes the image token but no generation prompt
-        # Keeping it short helps avoid prompt truncation without increasing max_prompt_length
-        prompt_text = processor.apply_chat_template(
-            conversation,
-            tokenize=False,
-            add_generation_prompt=False
-        )
-        
-        return {
-            # GRPO expects a prompt string (including image token) and images
-            "prompt": prompt_text,
-            "images": example["image"],
-            "chosen": response,
-            # Provide explicit fields some GRPO reward functions/datasets expect
-            "completion": response,
-            "answer": diagnosis_full,
-            "bbox": example["bbox"],
-            "diagnosis": example["diagnosis"]
+        results = {
+            "prompt": [],
+            "images": [],
+            "chosen": [],
+            "completion": [],
+            "answer": [],
+            "bbox": [],
+            "diagnosis": []
         }
+        
+        for i in range(len(examples['diagnosis'])):
+            diagnosis_full = dx_names.get(examples['diagnosis'][i], examples['diagnosis'][i])
+            prompt = "Analyze this skin lesion image. Respond in this exact format: <diagnosis>condition_name</diagnosis> <location>body_part</location> <bbox>[x1, y1, x2, y2]</bbox>"
+            
+            # Use localization field  
+            body_location = examples['localization'][i]
+            # Format bbox coordinates as integers
+            bbox_coords = examples['bbox'][i]
+            bbox_str = f"[{int(bbox_coords[0])}, {int(bbox_coords[1])}, {int(bbox_coords[2])}, {int(bbox_coords[3])}]"
+            
+            response = (
+                f"<diagnosis>{diagnosis_full}</diagnosis> "
+                f"<location>{body_location}</location> "
+                f"<bbox>{bbox_str}</bbox>"
+            )
+            
+            # Create conversation format - no system prompt, format instruction in user message
+            conversation = [
+                {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": prompt}]},
+                {"role": "assistant", "content": [{"type": "text", "text": response}]}
+            ]
+            
+            # Build chat-templated prompt with generation prompt for proper assistant response
+            prompt_text = processor.apply_chat_template(
+                conversation[:-1],  # Only user message, not assistant
+                tokenize=False,
+                add_generation_prompt=True
+            )
+            
+            results["prompt"].append(prompt_text)
+            results["images"].append(examples["image"][i])
+            results["chosen"].append(response)
+            results["completion"].append(response)
+            results["answer"].append(diagnosis_full)
+            results["bbox"].append(examples["bbox"][i])
+            results["diagnosis"].append(examples["diagnosis"][i])
+            results["localization"] = examples["localization"]
+        
+        return results
     
-    return data.map(format_conversation)
+    return data.map(format_conversation, num_proc=32, batched=True, batch_size=200)
 
 def calculate_reward(prompts, completions, **kwargs):
-    """Calculate reward for GRPO training with diagnosis, spatial, and bbox components."""
+    """Calculate reward for GRPO training with diagnosis and localization components."""
     import re
     
-    if isinstance(completions, str):
-        completions = [completions]
+    # Extract completion text (GRPO passes list of strings)
+    responses = completions
     
-    examples = kwargs.get('examples', [{}] * len(completions))
+    # Get ground truth data from kwargs
+    diagnosis = kwargs.get('diagnosis', [])
+    localization = kwargs.get('localization', [])
+    bbox = kwargs.get('bbox', [])
+    
+    # Ensure they're lists
+    if not isinstance(diagnosis, list):
+        diagnosis = [diagnosis] * len(responses)
+    if not isinstance(localization, list):
+        localization = [localization] * len(responses)
+    if not isinstance(bbox, list):
+        bbox = [bbox] * len(responses)
     
     # Reward weights
-    weights = {"diagnosis": 0.5, "spatial": 0.3, "segmentation": 0.2}
+    weights = {"diagnosis": 0.6, "localization": 0.3, "bbox": 0.1}
     
     # Diagnosis mapping
     dx_names = {
@@ -102,78 +128,122 @@ def calculate_reward(prompts, completions, **kwargs):
         'mel': 'melanoma', 'nv': 'melanocytic nevus', 'vasc': 'vascular lesion'
     }
     
-    def extract_tag(text, tag):
-        match = re.search(rf"<{tag}>([\s\S]*?)</{tag}>", text, re.IGNORECASE)
-        return match.group(1).strip() if match else ""
+    def extract_diagnosis(text):
+        # First try XML tag
+        match = re.search(r"<diagnosis>\s*(.*?)\s*</diagnosis>", text, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+        
+        # Fallback patterns for natural language
+        match = re.search(r"(?:This appears to be|appears to be|diagnosis[:\s]*is|condition[:\s]*is)\s+([^.]+)", text, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+        
+        # Look for specific condition names
+        conditions = ['melanoma', 'melanocytic nevus', 'basal cell carcinoma', 'actinic keratosis', 
+                     'benign keratosis-like lesion', 'dermatofibroma', 'vascular lesion']
+        for condition in conditions:
+            if condition.lower() in text.lower():
+                return condition
+        
+        return ""
+    
+    def extract_location(text):
+        # First try XML tag
+        match = re.search(r"<location>\s*(.*?)\s*</location>", text, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+        
+        # Fallback patterns for natural language
+        match = re.search(r"(?:located in|location is|found on|situated on|on the)\s+(?:the\s+)?([^.]+)", text, re.IGNORECASE)
+        if match:
+            location = match.group(1).strip()
+            # Clean up common phrases
+            location = re.sub(r"(center-center region|region)", "", location).strip()
+            return location
+        
+        # Look for body parts
+        body_parts = ['face', 'trunk', 'back', 'chest', 'abdomen', 'upper extremity', 'lower extremity', 
+                     'arm', 'leg', 'hand', 'foot', 'neck', 'scalp']
+        for part in body_parts:
+            if part.lower() in text.lower():
+                return part
+        
+        return ""
+    
+    def extract_bbox(text):
+        # Look for any coordinate pattern [x, y, x, y] in text
+        match = re.search(r"\[(\d+),?\s*(\d+),?\s*(\d+),?\s*(\d+)\]", text)
+        if match:
+            try:
+                return [int(match.group(i)) for i in range(1, 5)]
+            except:
+                pass
+        return []
     
     rewards = []
-    for i, completion in enumerate(completions):
-        example = examples[i] if i < len(examples) else {}
+    for i, response in enumerate(responses):
         reward = 0.0
         
-        # Extract model predictions
-        pred_diag = extract_tag(completion, "diagnosis").lower()
-        pred_loc = extract_tag(completion, "location").lower()
-        # Get expected diagnosis - handle both short codes and full names
-        diagnosis_code = example.get('diagnosis', '')
+        # Extract model predictions from response text
+        pred_diag = extract_diagnosis(response).lower()
+        pred_loc = extract_location(response).lower()
+        pred_bbox = extract_bbox(response)
+        
+        # Get expected values from function arguments (like your MedMCQA)
+        diagnosis_code = diagnosis[i] if i < len(diagnosis) else ''
         expected_diag = dx_names.get(diagnosis_code, diagnosis_code).lower()
+        expected_loc = str(localization[i] if i < len(localization) else '').lower()
+        sample_bbox = bbox[i] if i < len(bbox) else []
         
-        # 1. Diagnosis accuracy (50%)
-        if expected_diag and pred_diag and (expected_diag in pred_diag or pred_diag in expected_diag):
-            reward += weights["diagnosis"]
+        # 1. Diagnosis accuracy (60%)
+        if expected_diag and pred_diag:
+            if expected_diag == pred_diag:
+                reward += weights["diagnosis"]
+            elif expected_diag in pred_diag or pred_diag in expected_diag:
+                reward += weights["diagnosis"] * 0.8
+        elif expected_diag:
+            # Fallback: check if diagnosis appears anywhere in response (without tags)
+            if expected_diag in response.lower():
+                reward += weights["diagnosis"] * 0.4
         
-        # 2. Spatial location accuracy (30%)
-        gt_spatial = str(example.get('spatial_description', '')).lower()
-        if gt_spatial and pred_loc:
-            spatial_tokens = ['center-center', 'upper-left', 'upper-right', 'lower-left', 'lower-right', 'left', 'right', 'center', 'top', 'bottom']
-            if any(token in pred_loc and token in gt_spatial for token in spatial_tokens):
-                reward += weights["spatial"]
+        # 2. Localization accuracy (30%)
+        if expected_loc and pred_loc:
+            if expected_loc == pred_loc.strip():
+                reward += weights["localization"]
+            elif expected_loc in pred_loc:
+                reward += weights["localization"] * 0.7
         
-        # 3. Bbox reasoning (20%)
-        bbox = example.get('bbox', [])
-        if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
-            area_coverage = float(example.get('area_coverage', 0) or 0)
-            completion_lower = completion.lower()
-            
-            size_reward = 0.0
-            # Size reasoning
-            if area_coverage > 0.2 and ("large" in completion_lower or "big" in completion_lower):
-                size_reward += 0.1
-            elif area_coverage < 0.1 and ("small" in completion_lower or "tiny" in completion_lower):
-                size_reward += 0.1
-            
-            # Position reasoning - use bbox ratio to estimate position
-            # Since we don't have image dimensions, we can estimate based on bbox width/height ratio
-            x1, y1, x2, y2 = bbox
-            bbox_width = x2 - x1
-            bbox_height = y2 - y1
-            center_x = (x1 + x2) / 2.0
-            center_y = (y1 + y2) / 2.0
-            
-            # Estimate image dimensions from area_coverage and bbox area
-            bbox_area = bbox_width * bbox_height
-            if area_coverage > 0 and bbox_height > 0 and bbox_area > 0:
-                estimated_img_area = bbox_area / area_coverage
-                estimated_img_width = (estimated_img_area * (bbox_width / bbox_height)) ** 0.5
-                
-                # Normalize center position (avoid division by zero)
-                if estimated_img_width > 0:
-                    norm_center_x = center_x / estimated_img_width
-                    
-                    # Check position matches
-                    if norm_center_x > 0.67 and "right" in completion_lower:
-                        size_reward += 0.05
-                    elif norm_center_x < 0.33 and "left" in completion_lower:
-                        size_reward += 0.05
-                    elif 0.33 <= norm_center_x <= 0.67 and "center" in completion_lower:
-                        size_reward += 0.05
-            
-            reward += min(weights["segmentation"], size_reward)
+        # 3. Bbox prediction (10%)
+        if isinstance(sample_bbox, (list, tuple)) and len(sample_bbox) == 4:
+            if len(pred_bbox) == 4:
+                # Simple reward for predicting bbox coordinates
+                reward += weights["bbox"] * 0.8
+            else:
+                # Basic reward for bbox data existence
+                reward += weights["bbox"] * 0.2
         
         # Penalties for poor formatting
         if not pred_diag: reward *= 0.8
         if not pred_loc: reward *= 0.9
-        if len(completion.split()) > 120: reward *= 0.85
+        # Check if model includes bbox format (simple check)
+        has_bbox_format = '<bbox>' in response.lower() and '</bbox>' in response.lower()
+        if not has_bbox_format: reward *= 0.9
+        if len(response.split()) > 120: reward *= 0.85
+        
+        # Debug output for first few examples
+        if i < 3:
+            # Simple bbox comparison
+            bbox_found = "Yes" if len(pred_bbox) == 4 else "No"
+            has_tags = "Yes" if '<bbox>' in response.lower() else "No"
+            
+            print(f"Example {i+1}: Diag='{pred_diag}' vs GT='{expected_diag}' | Loc='{pred_loc}' vs GT='{expected_loc}' | BBox={bbox_found} | Tags={has_tags} | Reward={reward:.2f}")
+            if len(pred_bbox) == 4:
+                print(f"BBox: {pred_bbox}")
+            print(f"Model output: {response[:100]}...")
+            if i == 0:  # Show prompt for first example
+                prompt = prompts[0] if prompts else "No prompt available"
+                print(f"PROMPT DEBUG (full): {prompt}")  # Show full prompt
         
         rewards.append(max(0.0, min(1.0, reward)))
     
@@ -207,7 +277,7 @@ def main():
         model = Qwen2VLForConditionalGeneration.from_pretrained(
             base_model_name,
             torch_dtype=torch.bfloat16,
-            device_map="auto",
+            # device_map="auto",
             trust_remote_code=True
         )
         
@@ -229,7 +299,7 @@ def main():
         model = Qwen2VLForConditionalGeneration.from_pretrained(
             stage1_model_path,
             torch_dtype=torch.bfloat16,
-            device_map="auto",
+            # device_map="auto",
             trust_remote_code=True
         )
         
@@ -240,6 +310,15 @@ def main():
     
     if processor.tokenizer.pad_token is None:
         processor.tokenizer.pad_token = processor.tokenizer.eos_token
+    
+    # Fix for Qwen2-VL image token mismatch
+    processor.tokenizer.padding_side = "left"
+    
+    # Force consistent image processing
+    if hasattr(processor, 'image_processor'):
+        processor.image_processor.do_resize = True
+        processor.image_processor.size = {"height": 448, "width": 448}
+        processor.image_processor.do_normalize = True
     
     # Load dataset
     train_data = load_hf_dataset(config)
@@ -257,8 +336,8 @@ def main():
         num_train_epochs=config["training"]["num_epochs"],
         per_device_train_batch_size=config["training"]["batch_size"],
         gradient_accumulation_steps=1,
-        num_generations=4,
-        max_prompt_length=400,
+        num_generations=8,
+        max_prompt_length=512,
         max_completion_length=200,
 
         save_steps=1000,
@@ -268,11 +347,11 @@ def main():
         weight_decay=config["training"]["weight_decay"],
         max_grad_norm=config["training"]["max_grad_norm"],
 
-        # save_strategy="no",
         bf16=True,
         temperature=0.7,
         top_p=0.9,
-        report_to=config.get("report_to", "none")
+        report_to=config.get("report_to", "none"),
+        
     )
     
     # Initialize GRPO trainer with reward logging
@@ -281,7 +360,7 @@ def main():
         processing_class=processor,
         args=grpo_config,
         train_dataset=dataset,
-        reward_funcs=calculate_reward
+        reward_funcs=[calculate_reward]
     )
     
     # Reward logging callback for monitoring training

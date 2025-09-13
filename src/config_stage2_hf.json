@@ -1,16 +1,16 @@
 {
   "hf_dataset_name": "abaryan/ham10000_bbox",
-  "train_limit": 500,
+  "train_limit": 1000,
   "base_model_name": "Qwen/Qwen2-VL-2B-Instruct",
-  "stage1_model_path": "./qwen2vl-skin-diagnosis-hf",
+  "stage1_model_path": "./qwen2vl-sft",
   "output_dir": "./stage2_grpo_output",
   "max_length": 512,
   "report_to": "none",
   
   "training": {
-    "num_epochs": 3,
-    "batch_size": 8,
-    "learning_rate": 2e-5,
+    "num_epochs": 2,
+    "batch_size": 16,
+    "learning_rate": 5e-6,
     "warmup_steps": 100,
     "weight_decay": 0.01,
     "max_grad_norm": 1.0,
