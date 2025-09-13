@@ -42,44 +42,58 @@ def prepare_dataset(data, processor):
             'vasc': 'vascular lesion'
         }
         
-        diagnosis_full = dx_names.get(example['diagnosis'], example['diagnosis'])
-        prompt = (
-            "Analyze this skin lesion. Reply concisely using tags: "
-            "<diagnosis>...</diagnosis> and <location>...</location>."
-        )
+        # Handle both single example and batched examples
+        if not isinstance(examples['diagnosis'], list):
+            examples = {k: [v] for k, v in examples.items()}
         
-        # Format spatial description
-        spatial_desc = example['spatial_description']
-        response = (
-            f"<diagnosis>{diagnosis_full}</diagnosis> "
-            f"<location>{spatial_desc}</location>"
-        )
-        
-        # Create conversation format
-        conversation = [
-            {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": prompt}]},
-            {"role": "assistant", "content": [{"type": "text", "text": response}]}
-        ]
-        
-        # Build minimal chat-templated prompt that includes the image token but no generation prompt
-        # Keeping it short helps avoid prompt truncation without increasing max_prompt_length
-        prompt_text = processor.apply_chat_template(
-            conversation,
-            tokenize=False,
-            add_generation_prompt=False
-        )
-        
-        return {
-            # GRPO expects a prompt string (including image token) and images
-            "prompt": prompt_text,
-            "images": example["image"],
-            "chosen": response,
-            # Provide explicit fields some GRPO reward functions/datasets expect
-            "completion": response,
-            "answer": diagnosis_full,
-            "bbox": example["bbox"],
-            "diagnosis": example["diagnosis"]
+        results = {
+            "prompt": [],
+            "images": [],
+            "chosen": [],
+            "completion": [],
+            "answer": [],
+            "bbox": [],
+            "diagnosis": []
         }
+        
+        for i in range(len(examples['diagnosis'])):
+            diagnosis_full = dx_names.get(examples['diagnosis'][i], examples['diagnosis'][i])
+            prompt = "Analyze this skin lesion image. Respond in this exact format: <diagnosis>condition_name</diagnosis> <location>body_part</location> <bbox>[x1, y1, x2, y2]</bbox>"
+            
+            # Use localization field  
+            body_location = examples['localization'][i]
+            bbox_coords = examples['bbox'][i]
+            bbox_str = f"[{int(bbox_coords[0])}, {int(bbox_coords[1])}, {int(bbox_coords[2])}, {int(bbox_coords[3])}]"
+            
+            response = (
+                f"<diagnosis>{diagnosis_full}</diagnosis> "
+                f"<location>{body_location}</location> "
+                f"<bbox>{bbox_str}</bbox>"
+            )
+            
+            # Create conversation format - no system prompt, format instruction in user message
+            conversation = [
+                {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": prompt}]},
+                {"role": "assistant", "content": [{"type": "text", "text": response}]}
+            ]
+            
+            # Build chat-templated prompt with generation prompt for proper assistant response
+            prompt_text = processor.apply_chat_template(
+                conversation[:-1],  # Only user message, not assistant
+                tokenize=False,
+                add_generation_prompt=True
+            )
+            
+            results["prompt"].append(prompt_text)
+            results["images"].append(examples["image"][i])
+            results["chosen"].append(response)
+            results["completion"].append(response)
+            results["answer"].append(diagnosis_full)
+            results["bbox"].append(examples["bbox"][i])
+            results["diagnosis"].append(examples["diagnosis"][i])
+            results["localization"] = examples["localization"]
+        
+        return results
     
     return data.map(format_conversation, num_proc=32, batched=True, batch_size=200)
 
@@ -87,10 +101,20 @@ def calculate_reward(prompts, completions, **kwargs):
     """Calculate reward for GRPO training with diagnosis and localization components."""
     import re
     
-    if isinstance(completions, str):
-        completions = [completions]
+    # Extract completion text (GRPO passes list of strings)
+    responses = completions
+    # Get ground truth data from kwargs
+    diagnosis = kwargs.get('diagnosis', [])
+    localization = kwargs.get('localization', [])
+    bbox = kwargs.get('bbox', [])
     
-    examples = kwargs.get('examples', [{}] * len(completions))
+    # Ensure they're lists
+    if not isinstance(diagnosis, list):
+        diagnosis = [diagnosis] * len(responses)
+    if not isinstance(localization, list):
+        localization = [localization] * len(responses)
+    if not isinstance(bbox, list):
+        bbox = [bbox] * len(responses)
     
     # Reward weights
     weights = {"diagnosis": 0.6, "localization": 0.3, "bbox": 0.1}
