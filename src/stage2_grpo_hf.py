@@ -62,7 +62,6 @@ def prepare_dataset(data, processor):
             
             # Use localization field  
             body_location = examples['localization'][i]
-            # Format bbox coordinates as integers
             bbox_coords = examples['bbox'][i]
             bbox_str = f"[{int(bbox_coords[0])}, {int(bbox_coords[1])}, {int(bbox_coords[2])}, {int(bbox_coords[3])}]"
             
@@ -104,7 +103,6 @@ def calculate_reward(prompts, completions, **kwargs):
     
     # Extract completion text (GRPO passes list of strings)
     responses = completions
-    
     # Get ground truth data from kwargs
     diagnosis = kwargs.get('diagnosis', [])
     localization = kwargs.get('localization', [])
